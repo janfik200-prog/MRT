@@ -7,6 +7,3 @@ __pycache__/
 # данные (скачиваются/создаются локально)
 dataset/
 dataset_augmented/
-
-# локальные заметки
-CLAUDE.md
