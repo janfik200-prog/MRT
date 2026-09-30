@@ -1,0 +1,16 @@
+# окружение
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# данные и кэш (скачиваются/создаются локально)
+dataset/
+cache/
+
+# веса моделей
+notebooks/checkpoints/
+*.pt
+
+# локальные заметки
+CLAUDE.md
