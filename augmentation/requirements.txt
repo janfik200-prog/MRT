@@ -1,3 +1,9 @@
 albumentations>=2.0
 opencv-python>=4.8
 numpy
+# export.py
+pandas
+scikit-learn
+tqdm
+# dataset.py (torch с CUDA: pip install torch --index-url https://download.pytorch.org/whl/cu128)
+torch

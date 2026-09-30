@@ -1,8 +1,8 @@
 """
 torch Dataset с аугментацией на лету.
 
-Вынесен из ноутбука в модуль, чтобы DataLoader(num_workers>0) работал на Windows
-(дочерние процессы должны импортировать класс, а классы из ноутбука им недоступны).
+Лежит в модуле, а не в ноутбуке, чтобы DataLoader(num_workers>0) работал на Windows
+(дочерние процессы должны импортировать класс).
 """
 import torch
 from torch.utils.data import Dataset

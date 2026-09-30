@@ -1,8 +1,0 @@
-# torch с CUDA ставится отдельно:
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
--r augmentation/requirements.txt
-scikit-learn
-pandas
-matplotlib
-tqdm
-ipykernel

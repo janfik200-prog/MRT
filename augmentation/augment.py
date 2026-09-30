@@ -3,11 +3,14 @@
 
 Работает "на лету": исходные файлы в dataset/ не изменяются и не копируются.
 
-Уровни:
+Уровни (буквы комбинируются):
     none   - только предобработка (для валидации/теста и для бейзлайна)
     A      - геометрия + яркость
     AB     - A + шум и качество (против shortcut в notumor)
     ABC    - AB + МРТ-специфичные артефакты (bias field, ghosting, motion)
+    ABCG   - ABC + доп. геометрия (мягкий crop, эластика/сеточные искажения)
+    ABCGI  - ABCG + доп. интенсивность (CLAHE, резкость) — "максимальная" ручная политика
+    R      - RandAugment-подобная: flip + 2 случайные операции из общего пула
 
 Использование:
     from augment import load_image, build_transforms
@@ -24,7 +27,7 @@ import cv2
 import numpy as np
 
 IMG_SIZE = 224
-LEVELS = ("none", "A", "AB", "ABC")
+LEVELS = ("none", "A", "AB", "ABC", "ABCG", "ABCGI", "R")  # основные варианты для экспериментов
 
 
 # ----------------------------------------------------------------------------
@@ -183,24 +186,85 @@ def aug_C() -> list:
     ]
 
 
+def aug_G() -> list:
+    """Доп. геометрия: мягкий random-resized-crop и нелинейные деформации."""
+    bc = dict(border_mode=cv2.BORDER_CONSTANT, fill=0)
+    return [
+        # scale >= 0.75: маленькая опухоль гипофиза не вырезается
+        A.RandomResizedCrop(size=(IMG_SIZE, IMG_SIZE), scale=(0.75, 1.0), ratio=(0.9, 1.1), p=0.3),
+        A.OneOf([
+            A.ElasticTransform(alpha=30, sigma=6, **bc, p=1.0),
+            A.GridDistortion(num_steps=5, distort_limit=0.15, **bc, p=1.0),
+            A.OpticalDistortion(distort_limit=0.1, **bc, p=1.0),
+        ], p=0.3),
+    ]
+
+
+def aug_I() -> list:
+    """Доп. интенсивность: локальный контраст и резкость (разные протоколы/сканеры)."""
+    return [
+        A.OneOf([
+            A.CLAHE(clip_limit=(1, 3), p=1.0),
+            A.Sharpen(alpha=(0.1, 0.3), p=1.0),
+            A.UnsharpMask(alpha=(0.2, 0.5), p=1.0),
+        ], p=0.3),
+    ]
+
+
+def aug_R() -> list:
+    """RandAugment-подобная политика: flip + 2 случайные операции из всего пула (A, G, I, B, C)."""
+    bc = dict(border_mode=cv2.BORDER_CONSTANT, fill=0)
+    pool = [
+        A.Affine(rotate=(-15, 15), **bc, p=1.0),
+        A.Affine(translate_percent=(-0.1, 0.1), **bc, p=1.0),
+        A.Affine(scale=(0.85, 1.15), **bc, p=1.0),
+        A.Affine(shear=(-8, 8), **bc, p=1.0),
+        A.RandomResizedCrop(size=(IMG_SIZE, IMG_SIZE), scale=(0.75, 1.0), ratio=(0.9, 1.1), p=1.0),
+        A.ElasticTransform(alpha=30, sigma=6, **bc, p=1.0),
+        A.RandomBrightnessContrast(brightness_limit=0.25, contrast_limit=0.25, p=1.0),
+        A.RandomGamma(gamma_limit=(70, 130), p=1.0),
+        A.CLAHE(clip_limit=(1, 3), p=1.0),
+        A.Sharpen(alpha=(0.1, 0.3), p=1.0),
+        A.GaussianBlur(blur_limit=(3, 5), p=1.0),
+        A.GaussNoise(std_range=(0.01, 0.05), p=1.0),
+        A.ImageCompression(quality_range=(40, 95), p=1.0),
+        A.Downscale(scale_range=(0.4, 0.9), p=1.0),
+        RandomBiasField(coef=0.3, p=1.0),
+        RandomGhosting(p=1.0),
+        RandomMotion(p=1.0),
+    ]
+    return [A.HorizontalFlip(p=0.5), A.SomeOf(pool, n=2, replace=False, p=1.0)]
+
+
 def build_transforms(level: str = "A", normalize: bool = False) -> A.Compose:
     """
-    level: "none" | "A" | "AB" | "ABC".
+    level: "none" | "R" | комбинация букв из "ABCGI" в любом порядке, например "A", "AB", "ABC", "ABCGI".
+        A — геометрия + яркость, B — шум/качество файла, C — МРТ-артефакты,
+        G — доп. геометрия (crop, эластика), I — доп. интенсивность (CLAHE, резкость),
+        R — RandAugment-подобная политика (исключает остальные буквы).
     Вход — результат load_image(). Выход — IMG_SIZE x IMG_SIZE, 1 канал.
     normalize=True — float32 в диапазоне ~[-1, 1] (для обучения).
     Для предобученных CNN (3 канала) повторите канал: np.repeat(x[..., None], 3, -1).
     """
-    if level not in LEVELS:
-        raise ValueError(f"level должен быть одним из {LEVELS}")
+    if level != "none" and level != "R" and (not level or set(level) - set("ABCGI")):
+        raise ValueError(f"level: 'none', 'R' или буквы из 'ABCGI', получено {level!r}")
     # Сначала вписываем в квадрат: аугментации работают на 224x224 (быстрее)
     # и равномерно затрагивают и снимок, и поля (нет "рамки" после яркости).
     t = _resize()
+    if level == "R":
+        t += aug_R()
+    # Порядок как в реальности: геометрия/анатомия → интенсивность → артефакты
+    # съёмки (C) → сохранение файла (B: шум, JPEG, даунскейл).
     if "A" in level:
         t += aug_A()
-    if "B" in level:
-        t += aug_B()
+    if "G" in level:
+        t += aug_G()
+    if "I" in level:
+        t += aug_I()
     if "C" in level:
         t += aug_C()
+    if "B" in level:
+        t += aug_B()
     if normalize:
         t.append(A.Normalize(mean=0.5, std=0.5, max_pixel_value=255.0))
     return A.Compose(t)

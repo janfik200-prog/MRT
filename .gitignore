@@ -4,13 +4,9 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 
-# данные и кэш (скачиваются/создаются локально)
+# данные (скачиваются/создаются локально)
 dataset/
-cache/
-
-# веса моделей
-notebooks/checkpoints/
-*.pt
+dataset_augmented/
 
 # локальные заметки
 CLAUDE.md

@@ -34,6 +34,14 @@ SINGLE = [
     ("C: Bias field", RandomBiasField(coef=0.3, p=1)),
     ("C: Ghosting", RandomGhosting(intensity=(0.2, 0.2), p=1)),
     ("C: Motion", RandomMotion(p=1)),
+    ("G: ResizedCrop", A.RandomResizedCrop(size=(S, S), scale=(0.75, 0.75), ratio=(1, 1), p=1)),
+    ("G: Elastic", A.ElasticTransform(alpha=30, sigma=6, border_mode=cv2.BORDER_CONSTANT, fill=0, p=1)),
+    ("G: GridDistort", A.GridDistortion(num_steps=5, distort_limit=(0.15, 0.15),
+                                        border_mode=cv2.BORDER_CONSTANT, fill=0, p=1)),
+    ("G: OpticalDist", A.OpticalDistortion(distort_limit=(0.1, 0.1), border_mode=cv2.BORDER_CONSTANT, fill=0, p=1)),
+    ("I: CLAHE", A.CLAHE(clip_limit=(3, 3), p=1)),
+    ("I: Sharpen", A.Sharpen(alpha=(0.3, 0.3), p=1)),
+    ("I: Unsharp", A.UnsharpMask(alpha=(0.5, 0.5), p=1)),
 ]
 
 
@@ -71,13 +79,12 @@ def main(seed):
         for name, t in SINGLE:
             row.append(label(t(image=base.copy())["image"], name))
         rows.append(row)
-    # 14 колонок -> две полосы по 7 для удобного просмотра
-    top = [r[:7] for r in rows]
-    bottom = [r[7:] for r in rows]
-    cv2.imwrite(str(OUT_DIR / "1_single_augs.jpg"), grid(top + bottom), [cv2.IMWRITE_JPEG_QUALITY, 92])
+    # 21 колонка -> три полосы по 7 для удобного просмотра
+    bands = [[r[i:i + 7] for r in rows] for i in range(0, len(rows[0]), 7)]
+    cv2.imwrite(str(OUT_DIR / "1_single_augs.jpg"), grid(sum(bands, [])), [cv2.IMWRITE_JPEG_QUALITY, 92])
 
     # 2) Случайные комбинации по уровням (что реально увидит сеть при обучении)
-    for level in ("A", "AB", "ABC"):
+    for level in ("A", "AB", "ABC", "ABCGI", "R"):
         tf = build_transforms(level)
         rows = []
         for c, f in files.items():
