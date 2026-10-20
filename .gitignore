@@ -1,9 +1,29 @@
-# окружение
+# Local environments and cache
 .venv/
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
 .ipynb_checkpoints/
+.env
+.env.*
 
-# данные (скачиваются/создаются локально)
-dataset/
+# Source images and manifests
+!/dataset/
+!/dataset/**
+
+# Everything generated while working: results, previews, exports, scratch
+_work/
+
+# Archives and generated files
 dataset_augmented/
+preview/
+*.zip
+*.rar
+*.7z
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+results/
+.DS_Store
+Thumbs.db

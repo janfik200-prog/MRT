@@ -1,0 +1,9 @@
+numpy
+opencv-python>=4.8
+pandas
+scikit-learn
+tqdm
+torch
+jupyterlab
+ipykernel
+nbconvert

@@ -1,0 +1,42 @@
+Источники датасетов МРТ головного мозга
+Проверено: 19.10.2026
+
+1. PMRAM: Bangladeshi Brain Cancer - MRI Dataset
+   https://data.mendeley.com/datasets/m7w55sw88b/1
+   DOI: 10.17632/m7w55sw88b.1
+   Архив: Raw Data.zip
+   Проверенный локальный набор: 1505 снимков (фактическое содержимое архива).
+   Лицензия источника: CC BY 4.0.
+
+2. Multi-Class Brain Tumor MRI Dataset: Glioma, Healthy Brain,
+   Meningioma, and Pituitary Macroadenoma
+   https://data.mendeley.com/datasets/82mtzd8x72/2
+   DOI: 10.17632/82mtzd8x72.2
+   Архив: Multi-Class Brain Tumor MRI Dataset Glioma, Health.zip
+   Проверенный локальный набор: 1137 снимков (фактическое содержимое архива).
+   Лицензия источника: CC BY 4.0.
+
+3. BDNeuro-MRI: A Bangladeshi Clinical Brain Tumor MRI Dataset
+   for Four-Class Deep Learning Classification
+   https://data.mendeley.com/datasets/zwr4ntf94j/8
+   DOI: 10.17632/zwr4ntf94j.8
+   Архив: BDNeuro-MRI A Bangladeshi Clinical Brain Tumor MRI.zip
+   Проверенный локальный набор: 5941 снимок.
+   Лицензия источника: CC BY 4.0.
+
+Сверка с опубликованными архивами (19.10.2026):
+PMRAM: описание — 1600 исходных; опубликованный Raw Data.zip — 1505; у нас — 1505.
+MultiClass: описание — 1200; опубликованный ZIP — 1137; у нас — 1137.
+BDNeuro: описание — 5941; опубликованный ZIP — 5941; у нас — 5941.
+SHA-256 архивов сверены с официальным API Mendeley; все снимки в папках побайтно сверены с опубликованными ZIP.
+В архиве PMRAM Augmented Data.zip находятся отдельные авторские аугментации; он не входит в наш исходный набор.
+
+4. Brain Tumor MRI Dataset — Masoud Nickparvar (Kaggle)
+   https://www.kaggle.com/datasets/masoudnickparvar/brain-tumor-mri-dataset
+   Версия: 2; обновлена автором 13.02.2026; скачана 20.10.2026.
+   Папка: dataset/KaggleBrainTumor
+   Проверенный набор: 7200 снимков; Training 5600, Testing 1600.
+   Каждый класс: 1400 Training и 400 Testing; исходное разделение сохранено.
+   Лицензия источника: CC BY 4.0.
+   SHA-256 скачанного ZIP: 882817250048c78ef7a759cf23e540d7b581f2327b16663c9d3db12f5d2ffdb4
+   CRC архива и чтение всех 7200 снимков проверены.
