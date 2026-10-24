@@ -16,7 +16,7 @@ from torch.utils.data import ConcatDataset, Dataset
 
 from .augment import LEVELS, augment
 from .config import CLASSES, RESULTS_DIR, SOURCES, TARGET
-from .data import list_images, load_images
+from .data import load_images, read_manifest
 
 
 # ============================================================================
@@ -62,26 +62,36 @@ class MRIDataset(Dataset):
         return t, int(self.y[i])
 
 
-def build_datasets(expand: int, policies: dict = SOURCES):
+def build_datasets(expand: int, policies: dict = SOURCES, manifest: pd.DataFrame = None):
     """
-    Training всех источников (каждый со своим уровнем аугментации) и Testing без аугментации.
-    Возвращает: train (ConcatDataset), test (ConcatDataset),
-    test_table — по строке на тестовый снимок (source, file, true_index), counts — сводка.
+    Наборы по манифесту (data_prep/dataset.ipynb): train — каждый источник со своим уровнем
+    аугментации, val и test — без аугментации. Снимки split=excluded не используются.
+    Возвращает: train, val, test (ConcatDataset),
+    test_table — по строке на тестовый снимок (dataset, file, true_index), counts — сводка.
     """
-    train_parts, test_parts, test_rows, counts = [], [], [], []
+    m = read_manifest() if manifest is None else manifest
+    missing = set(policies) - set(m["source"])
+    if missing:
+        raise ValueError(f"В манифесте нет источников {sorted(missing)}: пересоздайте его в data_prep/dataset.ipynb")
+
+    train_parts, val_parts, test_parts, test_rows, counts = [], [], [], [], []
     for stream, (source, level) in enumerate(policies.items()):
-        records = list_images("Training", [source])
-        part = MRIDataset(*load_images(records), level, expand, stream)
+        rows = m[m["source"] == source]
+        train, val, test = (rows[rows["split"] == s] for s in ("train", "val", "test"))
+        part = MRIDataset(load_images(train["file"]), train["label"].to_numpy(), level, expand, stream)
         train_parts.append(part)
+        val_parts.append(MRIDataset(load_images(val["file"]), val["label"].to_numpy()))
+        test_parts.append(MRIDataset(load_images(test["file"]), test["label"].to_numpy()))
+        test_rows.append(test)
 
-        test_records = list_images("Testing", [source])
-        test_parts.append(MRIDataset(*load_images(test_records)))
-        test_rows += [{"dataset": source, "file": r.file, "true_index": r.label} for r in test_records]
-
-        counts.append({"dataset": source, "train_images": len(records), "test_images": len(test_records),
+        counts.append({"dataset": source, "train_images": len(train), "val_images": len(val),
+                       "test_images": len(test), "excluded": int(rows["split"].eq("excluded").sum()),
                        "augmentation": level, "expand": part.expand, "samples_per_epoch": len(part)})
         print(counts[-1], flush=True)
-    return ConcatDataset(train_parts), ConcatDataset(test_parts), pd.DataFrame(test_rows), counts
+
+    test_table = (pd.concat(test_rows)[["source", "file", "label"]]
+                  .rename(columns={"source": "dataset", "label": "true_index"}).reset_index(drop=True))
+    return ConcatDataset(train_parts), ConcatDataset(val_parts), ConcatDataset(test_parts), test_table, counts
 
 
 # ============================================================================
@@ -103,13 +113,15 @@ def save_json(obj, path):
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def fit(model, train_dl, epochs: int, device: str, run_dir, config: dict, lr: float = 1e-3) -> pd.DataFrame:
+def fit(model, train_dl, epochs: int, device: str, run_dir, config: dict, lr: float = 1e-3,
+        weight_decay: float = 1e-2, val_dl=None) -> pd.DataFrame:
     """
     AdamW + OneCycle, на GPU — смешанная точность (AMP).
+    Если задан val_dl, после каждой эпохи считаются метрики на валидации (см. validate).
     После каждой эпохи в run_dir пишутся history.csv и model.pt (модель, оптимизатор, расписание).
     """
     model.to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=lr)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=epochs * len(train_dl))
     amp = device == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=amp)
@@ -134,16 +146,44 @@ def fit(model, train_dl, epochs: int, device: str, run_dir, config: dict, lr: fl
             correct += (out.argmax(1) == yb).sum().item()
             total += len(yb)
 
-        row = {"epoch": epoch, "loss": loss_sum / total, "train_accuracy": correct / total,
-               "seconds": time.perf_counter() - started}
+        row = {"epoch": epoch, "loss": loss_sum / total, "train_accuracy": correct / total}
+        if val_dl is not None:
+            row.update(validate(model, val_dl, device))
+        row["seconds"] = time.perf_counter() - started
         history.append(row)
         pd.DataFrame(history).to_csv(run_dir / "history.csv", index=False)
         torch.save({"epoch": epoch, "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": opt.state_dict(), "scheduler_state_dict": sched.state_dict(),
                     "scaler_state_dict": scaler.state_dict(), "config": config}, run_dir / "model.pt")
+        val = (f", val loss {row['val_loss']:.4f}, val accuracy {row['val_accuracy']:.3f}, "
+               f"min precision {row['val_min_precision']:.3f}, min recall {row['val_min_recall']:.3f}"
+               if val_dl is not None else "")
         print(f"Эпоха {epoch:2d}/{epochs}: loss {row['loss']:.4f}, "
-              f"train accuracy {row['train_accuracy']:.3f}, {row['seconds']:.1f} с", flush=True)
+              f"train accuracy {row['train_accuracy']:.3f}{val}, {row['seconds']:.1f} с", flush=True)
     return pd.DataFrame(history)
+
+
+@torch.no_grad()
+def validate(model, dl, device: str) -> dict:
+    """
+    Loss, accuracy и худшие по классам precision и recall на dl.
+    Худший класс сравнивается с целью TARGET: цель выполнена, когда оба минимума ≥ TARGET.
+    """
+    model.eval()
+    loss_fn = nn.CrossEntropyLoss(reduction="sum")
+    loss_sum, truth, pred = 0.0, [], []
+    for xb, yb in dl:
+        xb, yb = xb.to(device), yb.to(device)
+        with torch.autocast(device_type=device, enabled=device == "cuda"):
+            out = model(xb)
+        loss_sum += loss_fn(out.float(), yb).item()
+        truth.append(yb.cpu())
+        pred.append(out.argmax(1).cpu())
+    truth, pred = torch.cat(truth).numpy(), torch.cat(pred).numpy()
+    labels = range(len(CLASSES))
+    return {"val_loss": loss_sum / len(truth), "val_accuracy": accuracy_score(truth, pred),
+            "val_min_precision": precision_score(truth, pred, labels=labels, average=None, zero_division=0).min(),
+            "val_min_recall": recall_score(truth, pred, labels=labels, average=None, zero_division=0).min()}
 
 
 @torch.no_grad()
@@ -163,15 +203,16 @@ def predict(model, dl, device: str) -> np.ndarray:
 # ============================================================================
 def evaluate(test_table: pd.DataFrame, pred: np.ndarray, run_dir=None):
     """
-    Precision и recall по классам — для всего Testing ("all") и для каждого источника.
+    Precision и recall по классам — для всего теста ("all") и для каждого источника.
     Возвращает (summary, by_class, confusion); если задан run_dir — сохраняет туда
     predictions.csv, summary.csv, metrics_by_class.csv, confusion_matrix.csv.
     """
     y_true = test_table["true_index"].to_numpy()
     labels = range(len(CLASSES))
+    masks = {"all": np.ones(len(y_true), bool)}
+    masks |= {source: test_table["dataset"].eq(source).to_numpy() for source in test_table["dataset"].unique()}
     rows, summaries = [], []
-    for scope in ("all", *test_table["dataset"].unique()):
-        mask = np.ones(len(y_true), bool) if scope == "all" else test_table["dataset"].eq(scope).to_numpy()
+    for scope, mask in masks.items():
         truth, guess = y_true[mask], pred[mask]
         precision = precision_score(truth, guess, labels=labels, average=None, zero_division=0)
         recall = recall_score(truth, guess, labels=labels, average=None, zero_division=0)

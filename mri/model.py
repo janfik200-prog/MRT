@@ -10,12 +10,12 @@ def block(c_in: int, c_out: int) -> nn.Sequential:
                          nn.ReLU(inplace=True), nn.MaxPool2d(2))
 
 
-def simple_cnn(n_classes: int = len(CLASSES)) -> nn.Sequential:
+def simple_cnn(n_classes: int = len(CLASSES), dropout: float = 0.3) -> nn.Sequential:
     """
     5 блоков (224 → 7, каналы 16 → 256), затем среднее по каждому каналу,
-    Dropout 0.3 и линейный слой на n_classes. Вход: [B, 1, 224, 224].
+    Dropout и линейный слой на n_classes. Вход: [B, 1, 224, 224].
     """
     return nn.Sequential(
         block(1, 16), block(16, 32), block(32, 64), block(64, 128), block(128, 256),
-        nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Dropout(0.3), nn.Linear(256, n_classes),
+        nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Dropout(dropout), nn.Linear(256, n_classes),
     )
