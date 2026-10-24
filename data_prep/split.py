@@ -1,5 +1,5 @@
 """
-Разбиение на train/val/test, чистка и манифест.
+Разбиение на train/test, чистка и манифест.
 
     from data_prep.split import build_manifest, save_manifest
     manifest = build_manifest()     # pandas.DataFrame, по строке на снимок
@@ -12,49 +12,26 @@
     class, label    класс и его номер в CLASSES
     group           группа почти одинаковых снимков (тот же снимок или соседние срезы серии)
     image           один и тот же снимок (копии) — строже, чем group; лежит внутри одной группы
-    split           train, val, test или excluded
+    split           train, test или excluded
     reason          почему excluded: label_conflict, duplicate, seen_in_training; иначе пусто
     duplicate_of    для reason=duplicate — какой файл оставлен вместо этого
 
 Правила (assign_splits):
     1. Группа со снимками разных классов исключается целиком (label_conflict): неизвестно,
        какой класс верный.
-    2. Training: от каждой копии остаётся один файл (KEEP_PRIORITY в mri/config.py),
-       остальные — duplicate. Оставшиеся делятся на train и val целыми группами.
-    3. Testing: снимки, чья группа есть в Training, исключаются (seen_in_training) — модель
-       видела этот снимок или соседний срез. От каждой копии остаётся один файл.
-    Итог: каждый снимок встречается один раз, группы train, val и test не пересекаются.
+    2. Training -> train: от каждой копии остаётся один файл (KEEP_PRIORITY в mri/config.py),
+       остальные — duplicate.
+    3. Testing -> test: снимки, чья группа есть в Training, исключаются (seen_in_training) —
+       модель видела этот снимок или соседний срез. От каждой копии остаётся один файл.
+    Итог: каждый снимок встречается один раз, группы train и test не пересекаются.
 """
-import numpy as np
 import pandas as pd
 
-from mri.config import KEEP_PRIORITY, MANIFEST, SAME_IMAGE_THRESHOLD, SOURCES, VAL_FRACTION, VAL_SEED
+from mri.config import KEEP_PRIORITY, MANIFEST, SAME_IMAGE_THRESHOLD, SOURCES
 from mri.preprocess import prepare
 
 from .duplicates import components, similar_pairs, thumbnails
 from .scan import list_images
-
-
-def split_validation(df: pd.DataFrame, fraction: float = VAL_FRACTION, seed: int = VAL_SEED) -> np.ndarray:
-    """
-    df — снимки Training (столбцы file, source, label, group). Возвращает маску: True — в val.
-    От каждого источника и класса около fraction снимков уходит в val, целыми группами.
-    Группа относится к источнику и классу своего снимка с наименьшими (источник, путь).
-    Результат не зависит от порядка строк df.
-    """
-    first = df.sort_values(["source", "file"]).drop_duplicates("group")  # первый снимок каждой группы
-    size = df["group"].value_counts()
-    rng = np.random.default_rng(seed)
-    val = set()
-    for _, stratum in first.groupby(["source", "label"], sort=True):
-        groups = stratum["group"].to_numpy()
-        need, taken = fraction * size[groups].sum(), 0
-        for k in rng.permutation(len(groups)):
-            if taken >= need:
-                break
-            val.add(groups[k])
-            taken += size[groups[k]]
-    return df["group"].isin(val).to_numpy()
 
 
 def keep_one_copy(df: pd.DataFrame) -> pd.Series:
@@ -87,9 +64,9 @@ def assign_splits(df: pd.DataFrame) -> pd.DataFrame:
     conflict = df.groupby("group")["label"].transform("nunique") > 1
     df.loc[conflict, "reason"] = "label_conflict"
 
-    # 2. Training: одна копия каждого снимка, затем train/val целыми группами.
+    # 2. Training: одна копия каждого снимка.
     train = _drop_copies(df, df[(df["original_split"] == "Training") & (df["reason"] == "")])
-    df.loc[train.index, "split"] = np.where(split_validation(train), "val", "train")
+    df.loc[train.index, "split"] = "train"
 
     # 3. Testing: без снимков, чья группа есть в Training, и по одной копии каждого снимка.
     test = df[(df["original_split"] == "Testing") & (df["reason"] == "")]

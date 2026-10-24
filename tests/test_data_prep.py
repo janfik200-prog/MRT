@@ -4,14 +4,13 @@
     python -m unittest discover -s tests      # из корня проекта
 """
 import unittest
-from collections import Counter
 
 import cv2
 import numpy as np
 import pandas as pd
 
 from data_prep.duplicates import ORIENTATIONS, components, near_duplicate_groups, similar_pairs, thumbnails
-from data_prep.split import assign_splits, keep_one_copy, split_validation
+from data_prep.split import assign_splits, keep_one_copy
 
 
 def brain_like(seed):
@@ -62,33 +61,6 @@ def table(rows):
     return pd.DataFrame(rows, columns=["file", "source", "original_split", "label", "group", "image"])
 
 
-class TestSplitValidation(unittest.TestCase):
-    def setUp(self):
-        # 2 источника × 2 класса × 40 снимков; каждый 5-й — в общей группе с парой из другого источника.
-        rows = []
-        for source in ("S1", "S2"):
-            for label in (0, 1):
-                for i in range(40):
-                    group = f"{label}-{i}" if i % 5 == 0 else f"{source}-{label}-{i}"
-                    rows.append((f"{source}/{label}/{i:02d}.jpg", source, "Training", label, group, group))
-        self.df = table(rows)
-
-    def test_groups_stay_together(self):
-        val = split_validation(self.df, 0.2, seed=0)
-        self.assertFalse(set(self.df["group"][val]) & set(self.df["group"][~val]))
-
-    def test_fraction_per_source_and_class(self):
-        val = split_validation(self.df, 0.2, seed=0)
-        for key, n in Counter(zip(self.df["source"][val], self.df["label"][val])).items():
-            self.assertTrue(4 <= n <= 14, (key, n))  # 20 % от 40 = 8, общие группы сдвигают счёт
-
-    def test_deterministic(self):
-        a = self.df["file"][split_validation(self.df, 0.2, seed=0)]
-        shuffled = self.df.sample(frac=1, random_state=1)
-        b = shuffled["file"][split_validation(shuffled, 0.2, seed=0)]
-        self.assertEqual(set(a), set(b))
-
-
 class TestKeepOneCopy(unittest.TestCase):
     def test_priority(self):
         df = table([
@@ -134,8 +106,8 @@ class TestAssignSplits(unittest.TestCase):
 
     def test_splits(self):
         split = self.out["split"]
-        self.assertIn(split["dataset/PMRAM/Training/x.jpg"], ("train", "val"))
-        self.assertIn(split["dataset/PMRAM/Training/w.jpg"], ("train", "val"))
+        self.assertEqual(split["dataset/PMRAM/Training/x.jpg"], "train")
+        self.assertEqual(split["dataset/PMRAM/Training/w.jpg"], "train")
         self.assertEqual(split["dataset/PMRAM/Testing/z.jpg"], "test")
         self.assertEqual((split == "excluded").sum(), 5)
         self.assertTrue((self.out["reason"][split == "excluded"] != "").all())

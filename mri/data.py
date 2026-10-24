@@ -6,7 +6,7 @@
     train = manifest[manifest["split"] == "train"]
     x = load_images(train["file"])                     # uint8 [N, 224, 224]
 
-Манифест создаёт data_prep/dataset.ipynb: какие снимки идут в train/val/test и с какими пометками.
+Манифест создаёт data_prep/dataset.ipynb: какие снимки идут в train/test и с какими пометками.
 """
 import numpy as np
 import pandas as pd

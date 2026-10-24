@@ -65,8 +65,8 @@ class MRIDataset(Dataset):
 def build_datasets(expand: int, policies: dict = SOURCES, manifest: pd.DataFrame = None):
     """
     Наборы по манифесту (data_prep/dataset.ipynb): train — каждый источник со своим уровнем
-    аугментации, val и test — без аугментации. Снимки split=excluded не используются.
-    Возвращает: train, val, test (ConcatDataset),
+    аугментации, test — без аугментации. Снимки split=excluded не используются.
+    Возвращает: train, test (ConcatDataset),
     test_table — по строке на тестовый снимок (dataset, file, true_index), counts — сводка.
     """
     m = read_manifest() if manifest is None else manifest
@@ -74,24 +74,23 @@ def build_datasets(expand: int, policies: dict = SOURCES, manifest: pd.DataFrame
     if missing:
         raise ValueError(f"В манифесте нет источников {sorted(missing)}: пересоздайте его в data_prep/dataset.ipynb")
 
-    train_parts, val_parts, test_parts, test_rows, counts = [], [], [], [], []
+    train_parts, test_parts, test_rows, counts = [], [], [], []
     for stream, (source, level) in enumerate(policies.items()):
         rows = m[m["source"] == source]
-        train, val, test = (rows[rows["split"] == s] for s in ("train", "val", "test"))
+        train, test = rows[rows["split"] == "train"], rows[rows["split"] == "test"]
         part = MRIDataset(load_images(train["file"]), train["label"].to_numpy(), level, expand, stream)
         train_parts.append(part)
-        val_parts.append(MRIDataset(load_images(val["file"]), val["label"].to_numpy()))
         test_parts.append(MRIDataset(load_images(test["file"]), test["label"].to_numpy()))
         test_rows.append(test)
 
-        counts.append({"dataset": source, "train_images": len(train), "val_images": len(val),
-                       "test_images": len(test), "excluded": int(rows["split"].eq("excluded").sum()),
+        counts.append({"dataset": source, "train_images": len(train), "test_images": len(test),
+                       "excluded": int(rows["split"].eq("excluded").sum()),
                        "augmentation": level, "expand": part.expand, "samples_per_epoch": len(part)})
         print(counts[-1], flush=True)
 
     test_table = (pd.concat(test_rows)[["source", "file", "label"]]
                   .rename(columns={"source": "dataset", "label": "true_index"}).reset_index(drop=True))
-    return ConcatDataset(train_parts), ConcatDataset(val_parts), ConcatDataset(test_parts), test_table, counts
+    return ConcatDataset(train_parts), ConcatDataset(test_parts), test_table, counts
 
 
 # ============================================================================
@@ -114,10 +113,9 @@ def save_json(obj, path):
 
 
 def fit(model, train_dl, epochs: int, device: str, run_dir, config: dict, lr: float = 1e-3,
-        weight_decay: float = 1e-2, val_dl=None) -> pd.DataFrame:
+        weight_decay: float = 1e-2) -> pd.DataFrame:
     """
     AdamW + OneCycle, на GPU — смешанная точность (AMP).
-    Если задан val_dl, после каждой эпохи считаются метрики на валидации (см. validate).
     После каждой эпохи в run_dir пишутся history.csv и model.pt (модель, оптимизатор, расписание).
     """
     model.to(device)
@@ -146,44 +144,16 @@ def fit(model, train_dl, epochs: int, device: str, run_dir, config: dict, lr: fl
             correct += (out.argmax(1) == yb).sum().item()
             total += len(yb)
 
-        row = {"epoch": epoch, "loss": loss_sum / total, "train_accuracy": correct / total}
-        if val_dl is not None:
-            row.update(validate(model, val_dl, device))
-        row["seconds"] = time.perf_counter() - started
+        row = {"epoch": epoch, "loss": loss_sum / total, "train_accuracy": correct / total,
+               "seconds": time.perf_counter() - started}
         history.append(row)
         pd.DataFrame(history).to_csv(run_dir / "history.csv", index=False)
         torch.save({"epoch": epoch, "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": opt.state_dict(), "scheduler_state_dict": sched.state_dict(),
                     "scaler_state_dict": scaler.state_dict(), "config": config}, run_dir / "model.pt")
-        val = (f", val loss {row['val_loss']:.4f}, val accuracy {row['val_accuracy']:.3f}, "
-               f"min precision {row['val_min_precision']:.3f}, min recall {row['val_min_recall']:.3f}"
-               if val_dl is not None else "")
         print(f"Эпоха {epoch:2d}/{epochs}: loss {row['loss']:.4f}, "
-              f"train accuracy {row['train_accuracy']:.3f}{val}, {row['seconds']:.1f} с", flush=True)
+              f"train accuracy {row['train_accuracy']:.3f}, {row['seconds']:.1f} с", flush=True)
     return pd.DataFrame(history)
-
-
-@torch.no_grad()
-def validate(model, dl, device: str) -> dict:
-    """
-    Loss, accuracy и худшие по классам precision и recall на dl.
-    Худший класс сравнивается с целью TARGET: цель выполнена, когда оба минимума ≥ TARGET.
-    """
-    model.eval()
-    loss_fn = nn.CrossEntropyLoss(reduction="sum")
-    loss_sum, truth, pred = 0.0, [], []
-    for xb, yb in dl:
-        xb, yb = xb.to(device), yb.to(device)
-        with torch.autocast(device_type=device, enabled=device == "cuda"):
-            out = model(xb)
-        loss_sum += loss_fn(out.float(), yb).item()
-        truth.append(yb.cpu())
-        pred.append(out.argmax(1).cpu())
-    truth, pred = torch.cat(truth).numpy(), torch.cat(pred).numpy()
-    labels = range(len(CLASSES))
-    return {"val_loss": loss_sum / len(truth), "val_accuracy": accuracy_score(truth, pred),
-            "val_min_precision": precision_score(truth, pred, labels=labels, average=None, zero_division=0).min(),
-            "val_min_recall": recall_score(truth, pred, labels=labels, average=None, zero_division=0).min()}
 
 
 @torch.no_grad()
