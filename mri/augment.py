@@ -362,7 +362,10 @@ def rand_crop(x, rng, scale=(0.95, 1.0), ratio=(0.97, 1.03)):
     return x
 
 
-def rand_elastic(x, rng, alpha=30.0, sigma=6.0):
+def rand_elastic(x, rng, alpha=80.0, sigma=6.0):
+    # Поле нормируется по максимуму и сильно размывается, поэтому смещения малы:
+    # при alpha=30 в среднем 0.4 px (снимок не меняется), при 80 — ~1.2 px, у 1 % пикселей ~4 px.
+    # Начиная с ~120 края черепа становятся волнистыми.
     return elastic(x, *elastic_field(x.shape, alpha, sigma, rng))
 
 

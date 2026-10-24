@@ -27,26 +27,29 @@ class MRIDataset(Dataset):
     x: uint8 [N, 224, 224] (после prepare()), y: метки [N].
     level — уровень аугментации (mri/augment.py), "none" — без неё.
     expand > 1: каждый снимок встречается expand раз за эпоху, каждый раз с новой аугментацией.
+    stream — номер набора: у частей одного ConcatDataset разные потоки случайных чисел.
     Выход: float32 [1, 224, 224] в диапазоне [-1, 1] и метка.
 
     Класс лежит в модуле, а не в ноутбуке, чтобы DataLoader(num_workers>0) работал
     на Windows: дочерние процессы должны его импортировать.
     """
 
-    def __init__(self, x, y, level: str = "none", expand: int = 1):
+    def __init__(self, x, y, level: str = "none", expand: int = 1, stream: int = 0):
         if level not in LEVELS:
             raise ValueError(f"level: один из {LEVELS}, получено {level!r}")
         self.x, self.y, self.level = x, y, level
         self.expand = expand if level != "none" else 1
+        self.stream = stream
         self._seed, self._rng = None, None
 
     def rng(self) -> np.random.Generator:
         # Генератор случайных чисел создаём от torch.initial_seed(): он свой в каждом
-        # процессе DataLoader и меняется каждую эпоху. Иначе все процессы получили бы
-        # копию одного генератора и выдавали одинаковые «случайные» варианты.
+        # процессе DataLoader (без persistent_workers — новый каждую эпоху). Иначе все
+        # процессы получили бы копию одного генератора и выдавали одинаковые варианты.
+        # stream добавляется к seed, чтобы у разных источников потоки не совпадали.
         seed = torch.initial_seed()
         if seed != self._seed:
-            self._seed, self._rng = seed, np.random.default_rng(seed)
+            self._seed, self._rng = seed, np.random.default_rng([seed, self.stream])
         return self._rng
 
     def __len__(self):
@@ -66,9 +69,9 @@ def build_datasets(expand: int, policies: dict = SOURCES):
     test_table — по строке на тестовый снимок (source, file, true_index), counts — сводка.
     """
     train_parts, test_parts, test_rows, counts = [], [], [], []
-    for source, level in policies.items():
+    for stream, (source, level) in enumerate(policies.items()):
         records = list_images("Training", [source])
-        part = MRIDataset(*load_images(records), level, expand)
+        part = MRIDataset(*load_images(records), level, expand, stream)
         train_parts.append(part)
 
         test_records = list_images("Testing", [source])

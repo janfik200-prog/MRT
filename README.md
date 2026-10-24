@@ -15,6 +15,7 @@ mri/                     код проекта
   data.py                поиск снимков в dataset/ и загрузка в память
   model.py               свёрточная сеть SimpleCNN
   train.py               Dataset для PyTorch, обучение, предсказания, метрики
+tests/                   проверки аугментации (сравнение с OpenCV и свойства)
 model.ipynb              запуск обучения и таблицы результатов
 _work/                   всё создаваемое при работе; в git не попадает (см. ниже)
 requirements.txt         зависимости
@@ -83,5 +84,11 @@ python -m venv .venv
 `config.json`, `history.csv`, `model.pt`, `predictions.csv`, `summary.csv`,
 `metrics_by_class.csv`, `confusion_matrix.csv`.
 При ошибке рабочих процессов DataLoader на Windows поставьте `NUM_WORKERS = 0`.
+
+Проверки аугментации (около секунды):
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+```
 
 Лицензии исходных датасетов и ссылки на авторов указаны в `DATASET_LINKS.txt`.
