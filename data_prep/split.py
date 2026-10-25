@@ -13,7 +13,7 @@
     group           группа почти одинаковых снимков (тот же снимок или соседние срезы серии)
     image           один и тот же снимок (копии) — строже, чем group; лежит внутри одной группы
     split           train, test или excluded
-    reason          почему excluded: label_conflict, duplicate, seen_in_training; иначе пусто
+    reason          почему excluded: label_conflict, duplicate, seen_in_training, near_test; иначе пусто
     duplicate_of    для reason=duplicate — какой файл оставлен вместо этого
 
 Правила (assign_splits):
@@ -23,11 +23,16 @@
        остальные — duplicate.
     3. Testing -> test: снимки, чья группа есть в Training, исключаются (seen_in_training) —
        модель видела этот снимок или соседний срез. От каждой копии остаётся один файл.
-    Итог: каждый снимок встречается один раз, группы train и test не пересекаются.
+    4. Снимки train, напрямую похожие на снимок test сильнее TEST_LEAK_THRESHOLD, исключаются
+       (near_test): скорее всего, тот же пациент, но слабее порога группы.
+    Итог: каждый снимок встречается один раз, группы train и test не пересекаются,
+    и ни один снимок train не похож на снимок test сильнее TEST_LEAK_THRESHOLD.
 """
+import numpy as np
 import pandas as pd
 
-from mri.config import KEEP_PRIORITY, MANIFEST, SAME_IMAGE_THRESHOLD, SOURCES
+from mri.config import (KEEP_PRIORITY, MANIFEST, NEAR_DUP_THRESHOLD, SAME_IMAGE_THRESHOLD, SOURCES,
+                        TEST_LEAK_THRESHOLD)
 from mri.preprocess import prepare
 
 from .duplicates import components, similar_pairs, thumbnails
@@ -52,10 +57,11 @@ def _drop_copies(df: pd.DataFrame, part: pd.DataFrame) -> pd.DataFrame:
     return part[~duplicate]
 
 
-def assign_splits(df: pd.DataFrame) -> pd.DataFrame:
+def assign_splits(df: pd.DataFrame, pairs: tuple = None, leak_threshold: float = TEST_LEAK_THRESHOLD) -> pd.DataFrame:
     """
     df — столбцы file, source, original_split, label, group, image. Возвращает df со столбцами
     split, reason, duplicate_of по правилам из описания модуля.
+    pairs — (i, j, sim) из similar_pairs по номерам строк df; без них правило 4 не применяется.
     """
     df = df.copy()
     df["split"], df["reason"], df["duplicate_of"] = "excluded", "", ""
@@ -74,6 +80,15 @@ def assign_splits(df: pd.DataFrame) -> pd.DataFrame:
     df.loc[test.index[seen], "reason"] = "seen_in_training"
     test = _drop_copies(df, test[~seen])
     df.loc[test.index, "split"] = "test"
+
+    # 4. Train без прямых соседей test (без цепочки, иначе исключились бы тысячи снимков).
+    if pairs is not None:
+        i, j, sim = pairs
+        i, j = i[sim > leak_threshold], j[sim > leak_threshold]
+        split = df["split"].to_numpy()
+        near = np.unique(np.concatenate([i[(split[i] == "train") & (split[j] == "test")],
+                                         j[(split[j] == "train") & (split[i] == "test")]]))
+        df.loc[df.index[near], ["split", "reason"]] = ["excluded", "near_test"]
     return df
 
 
@@ -84,7 +99,9 @@ def build_manifest(sources=SOURCES) -> pd.DataFrame:
     лежат в разных источниках и по обе стороны исходного разделения.
     """
     records = list_images("Training", sources) + list_images("Testing", sources)
-    i, j, sim = similar_pairs(thumbnails(prepare(r.path) for r in records))
+    i, j, sim = similar_pairs(thumbnails(prepare(r.path) for r in records),
+                              min(NEAR_DUP_THRESHOLD, TEST_LEAK_THRESHOLD))
+    group = sim > NEAR_DUP_THRESHOLD
     same = sim > SAME_IMAGE_THRESHOLD
     m = pd.DataFrame({
         "file": [r.file for r in records],
@@ -92,10 +109,10 @@ def build_manifest(sources=SOURCES) -> pd.DataFrame:
         "original_split": [r.split for r in records],
         "class": [r.cls for r in records],
         "label": [r.label for r in records],
-        "group": components(len(records), i, j),
+        "group": components(len(records), i[group], j[group]),
         "image": components(len(records), i[same], j[same]),
     })
-    return assign_splits(m)
+    return assign_splits(m, (i, j, sim))
 
 
 def save_manifest(manifest: pd.DataFrame, path=MANIFEST):

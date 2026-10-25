@@ -112,6 +112,15 @@ class TestAssignSplits(unittest.TestCase):
         self.assertEqual((split == "excluded").sum(), 5)
         self.assertTrue((self.out["reason"][split == "excluded"] != "").all())
 
+    def test_near_test(self):
+        # w (train, строка 7) похож на z (test, строка 5) сильнее порога, x (train, строка 0) — слабее
+        pairs = (np.array([7, 5, 0]), np.array([5, 7, 5]), np.array([0.9, 0.9, 0.8]))
+        out = assign_splits(self.df, pairs, leak_threshold=0.85).set_index("file")
+        self.assertEqual(out.loc["dataset/PMRAM/Training/w.jpg", "reason"], "near_test")
+        self.assertEqual(out.loc["dataset/PMRAM/Training/w.jpg", "split"], "excluded")
+        self.assertEqual(out.loc["dataset/PMRAM/Training/x.jpg", "split"], "train")
+        self.assertEqual(out.loc["dataset/PMRAM/Testing/z.jpg", "split"], "test")
+
     def test_each_image_once_and_groups_disjoint(self):
         used = self.out[self.out["split"] != "excluded"]
         self.assertTrue((used.groupby("image").size() == 1).all())
